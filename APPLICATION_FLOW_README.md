@@ -170,36 +170,62 @@ POST /api/v1/documents/upload (>5MB)
 
 ---
 
-## **3. SEARCH / RAG FLOW**
+## **3. SEARCH / RAG FLOW (WITH QUERY EXPANSION)**
 
 ```
 POST /api/v1/search
 {
-  "query": "how to use embeddings?",
+  "query": "how to deploy kubernetes?",
   "collection_id": "default",
   "top_k": 5,
+  "use_query_expansion": true,
   "use_rerank": true
 }
     ↓
 1. Validate request
     └─ Verify collection belongs to user
     ↓
-2. Hybrid search (dual approach)
-    ├─ Vector search (semantic)
-    │  └─ OpenRouterEmbeddings.embed(query)
-    │     ├─ Call: https://openrouter.ai/api/v1/embeddings
-    │     └─ Get query vector
-    │        ↓
-    │     HybridVectorStore.hybrid_search()
-    │     ├─ Semantic: Chroma cosine similarity
-    │     ├─ Keyword: BM25 TF-IDF matching
-    │     ├─ Combine: alpha*semantic + (1-alpha)*keyword
-    │     └─ Return top_k*2 results (for reranking)
+2. Query Expansion (if enabled)
+    ├─ QueryExpansionService.generate_variants(query, num_variants=3, timeout=5s)
+    │  ├─ Call: https://openrouter.ai/api/v1/chat/completions
+    │  ├─ Model: openai/gpt-4o-mini
+    │  ├─ Prompt: "Generate 3 different search queries capturing different aspects"
+    │  ├─ Variants generated:
+    │  │  ├─ "kubernetes deployment guide"
+    │  │  ├─ "kubectl apply deployment steps"
+    │  │  └─ "kubernetes pod deployment best practices"
+    │  │
+    │  ├─ On timeout/error: return empty list (graceful degradation)
+    │  └─ Proceed with: [original_query, variant1, variant2, variant3]
     │
-    └─ Thread-safe: WITH _search_lock
+    ├─ NOTE: If no expansion, queries_to_search = [original_query]
+    └─ Timeout: 5 seconds (QUERY_EXPANSION_TIMEOUT config)
     ↓
-3. Rerank results (if enabled)
-    ├─ Take top_k*2 results
+3. Parallel Hybrid Search (if expansion used)
+    ├─ ThreadPoolExecutor (max 4 workers)
+    ├─ For each query in queries_to_search:
+    │  ├─ Vector search (semantic)
+    │  │  └─ OpenRouterEmbeddings.embed(query)
+    │  │     ├─ Call: https://openrouter.ai/api/v1/embeddings
+    │  │     └─ Get query vector
+    │  │
+    │  ├─ HybridVectorStore.hybrid_search()
+    │  │  ├─ Semantic: Chroma cosine similarity
+    │  │  ├─ Keyword: BM25 TF-IDF matching
+    │  │  ├─ Combine: alpha*semantic + (1-alpha)*keyword
+    │  │  └─ Return top_k*2 results
+    │  │
+    │  └─ Thread-safe: WITH _bm25_lock (read lock)
+    │
+    ├─ Merge Results (deduplication by chunk_id)
+    │  ├─ For each chunk_id: keep max score
+    │  ├─ Sort by score descending
+    │  └─ Return top_k
+    │
+    └─ If no expansion: single query search (standard flow)
+    ↓
+4. Rerank results (if enabled)
+    ├─ Take top_k results
     ├─ OpenRouterReranker.rerank(query, docs)
     │  ├─ Call: https://openrouter.ai/api/v1/embeddings
     │  ├─ Model: nvidia/llama-nemotron-rerank-vl-1b-v2
@@ -207,24 +233,41 @@ POST /api/v1/search
     │  └─ Return ranked list
     └─ Sort by relevance score
     ↓
-4. Return top_k results
+5. Return top_k results
     └─ SearchResponse
-        ├─ query: "how to use embeddings?"
+        ├─ query: "how to deploy kubernetes?"
         ├─ results: [SearchResultItem, ...]
         │  ├─ content: "chunk text..."
         │  ├─ source: "document_id"
-        │  ├─ score: 0.92
+        │  ├─ score: 0.92 (improved by expansion)
         │  └─ metadata: {...}
-        ├─ search_time_ms: 125.4
+        ├─ search_time_ms: 2150.4 (includes expansion + parallel searches)
         └─ result_count: 5
+```
+
+**Query Expansion Features:**
+- ✅ Optional per-request via `use_query_expansion` parameter
+- ✅ Configurable globally via `QUERY_EXPANSION_ENABLED` env var
+- ✅ Graceful degradation: timeout/error → uses original query only
+- ✅ Parallel execution: all query variants searched in parallel
+- ✅ Result merging: deduplicates by chunk_id, keeps max score
+
+**Configuration:**
+```
+QUERY_EXPANSION_ENABLED=true/false     # Enable feature
+QUERY_EXPANSION_NUM_VARIANTS=3         # Number of variants to generate
+QUERY_EXPANSION_TIMEOUT=5.0            # Timeout in seconds
+QUERY_EXPANSION_MODEL=openai/gpt-4o-mini  # LLM model for variants
+OPENROUTER_API_KEY=sk-xxx             # Required for expansion
 ```
 
 **Key Files:**
 - `app/api/v1/endpoints/search.py` - Search endpoint
-- `app/services/rag_service.py` - `search()` method with locks
+- `app/services/rag_service.py` - `search()` method with expansion logic
+- `app/services/expansion_service.py` - Query variant generation
 - `app/services/embedding_service.py` - Async embeddings
 - `app/services/reranker_service.py` - Reranking
-- `src/vector_store.py` (from local-rag-chromedb) - Hybrid search
+- `app/rag_components/vector_store.py` - Hybrid search
 
 ---
 
@@ -327,13 +370,13 @@ RateLimitMiddleware
 
 ---
 
-## **7. COMPLETE REQUEST LIFECYCLE EXAMPLE**
+## **7. COMPLETE REQUEST LIFECYCLE EXAMPLE (WITH QUERY EXPANSION)**
 
 ```
 User: curl -X POST http://localhost:8000/api/v1/search \
   -H "Authorization: Bearer sk_rag_xxxxx" \
   -H "Content-Type: application/json" \
-  -d '{"query": "embeddings", "collection_id": "default"}'
+  -d '{"query": "deploy kubernetes", "use_query_expansion": true, "top_k": 5}'
     │
     ├─→ uvicorn receives request
     │
@@ -362,32 +405,61 @@ User: curl -X POST http://localhost:8000/api/v1/search \
     │
     ├─→ Handler: search()
     │    ├─ Verify collection belongs to user
-    │    ├─ WITH _search_lock:
-    │    │  ├─ Embed query: "embeddings"
-    │    │  │  └─ Call OpenRouter API
-    │    │  ├─ Hybrid search: BM25 + vector
-    │    │  │  └─ Chroma returns top 10 results
-    │    │  └─ Get results
     │    │
-    │    ├─ Rerank results
+    │    ├─ Query Expansion (if use_query_expansion=true)
+    │    │  ├─ QueryExpansionService.generate_variants()
+    │    │  │  ├─ Call OpenRouter chat API (timeout: 5s)
+    │    │  │  ├─ Model: openai/gpt-4o-mini
+    │    │  │  └─ Returns: ["deploy kubernetes", "kubectl deployment guide", "k8s pod setup"]
+    │    │  │
+    │    │  └─ queries_to_search = [original + 3 variants]
+    │    │
+    │    ├─ Parallel Hybrid Search (ThreadPoolExecutor, 4 workers)
+    │    │  ├─ Query 1: "deploy kubernetes"
+    │    │  │  ├─ Embed via OpenRouter
+    │    │  │  ├─ WITH _bm25_lock: Hybrid search
+    │    │  │  └─ Return top 10 results
+    │    │  │
+    │    │  ├─ Query 2: "kubectl deployment guide"
+    │    │  │  ├─ Embed via OpenRouter
+    │    │  │  ├─ WITH _bm25_lock: Hybrid search
+    │    │  │  └─ Return top 10 results
+    │    │  │
+    │    │  ├─ Query 3: "k8s pod setup"
+    │    │  │  ├─ (parallel execution)
+    │    │  │  └─ Return top 10 results
+    │    │  │
+    │    │  └─ Merge all results (dedup by chunk_id, keep max score)
+    │    │
+    │    ├─ Rerank results (if enabled)
     │    │  ├─ Call OpenRouter reranker
     │    │  └─ Score by relevance
     │    │
-    │    └─ Return top 5 SearchResponse
+    │    └─ Return top 5 SearchResponse (improved by expansion)
     │
     ├─→ Exception handler (if error)
+    │    ├─ Expansion timeout: proceed with original query (graceful)
     │    └─ Format error, include request_id
     │
     ├─→ Response object
     │    ├─ Add X-Request-ID header
-    │    ├─ JSON content: {"items": [...], "total": 5}
+    │    ├─ JSON content:
+    │    │  {
+    │    │    "query": "deploy kubernetes",
+    │    │    "results": [
+    │    │      {"content": "...", "score": 0.95, ...},
+    │    │      ...
+    │    │    ],
+    │    │    "search_time_ms": 2150.4,
+    │    │    "result_count": 5
+    │    │  }
     │    └─ status_code: 200
     │
     ├─→ RequestTracingMiddleware (after handler)
-    │    └─ Log: "← POST /api/v1/search 200 (125ms)"
+    │    └─ Log: "← POST /api/v1/search 200 (2150ms)"
     │
     └─→ uvicorn sends response
-         Client receives: {"items": [...], "X-Request-ID": "550e8400..."}
+         Client receives: {"query": "...", "results": [...], "X-Request-ID": "550e8400..."}
 ```
 
 ---
@@ -479,6 +551,9 @@ Rate Limiting & Request Tracing
 Route Handler + CRUD Operations
     ↓
 RAG Service (embeddings, search, reranking)
+    ├─ Optional Query Expansion (LLM-based variants)
+    │  ├─ Parallel multi-query search
+    │  └─ Result deduplication & merging
     ├─ Async HTTP to OpenRouter
     ├─ Thread-safe access to BM25 + vector store
     └─ Background task processing
@@ -494,6 +569,7 @@ Client receives response
 
 All with:
 ✅ Security (auth, hashing, rate limiting)
-✅ Reliability (locks, error handling, graceful shutdown)
+✅ Reliability (locks, error handling, graceful shutdown, timeout handling)
 ✅ Observability (request tracing, structured logging)
-✅ Performance (async, background tasks, caching)
+✅ Performance (async, background tasks, caching, parallel searches)
+✅ Quality (query expansion for improved relevance, reranking)
