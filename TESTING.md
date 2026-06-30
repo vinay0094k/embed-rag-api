@@ -219,6 +219,35 @@ def test_invalid_input(client):
     assert "request_id" in data["error"]
 ```
 
+### **Test Query Expansion**
+
+```python
+def test_search_with_query_expansion(client, auth_headers):
+    """Test query expansion for improved relevance."""
+    # First, upload a document
+    # Then search with expansion enabled
+    response = client.post(
+        "/api/v1/search",
+        headers=auth_headers,
+        json={
+            "query": "kubernetes deployment",
+            "collection_id": "default",
+            "top_k": 5,
+            "use_query_expansion": True  # Enable expansion
+        }
+    )
+    
+    assert response.status_code == 200
+    data = response.json()
+    assert "results" in data
+    assert "search_time_ms" in data  # Will be longer due to expansion
+    assert data["search_time_ms"] > 1000  # Typical expansion overhead
+    
+    # Results should have improved relevance scores
+    if data["results"]:
+        assert all(r["score"] > 0 for r in data["results"])
+```
+
 ---
 
 ## **Logging in Tests**

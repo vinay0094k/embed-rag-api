@@ -16,6 +16,15 @@ The RAG API uses **in-memory BM25Index** with **thread locks** for safety:
 - Prevents concurrent read/write race conditions
 - Released immediately after search (reranking happens outside lock)
 
+### Threading Model
+
+**Query Expansion (if enabled):**
+- Uses `ThreadPoolExecutor` with max 4 workers
+- Launches parallel searches for original query + variants
+- Each search acquires `_bm25_lock` (read lock)
+- Results merged after all searches complete
+- Thread-safe: concurrent reads to BM25 are allowed
+
 ### Code Example
 
 ```python

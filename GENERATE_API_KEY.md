@@ -109,7 +109,7 @@ curl -X POST http://localhost:8000/api/v1/documents/upload \
   -F "collection_id=default"
 ```
 
-### Search
+### Search (Basic)
 ```bash
 curl -X POST http://localhost:8000/api/v1/search \
   -H "Authorization: Bearer $API_KEY" \
@@ -119,6 +119,20 @@ curl -X POST http://localhost:8000/api/v1/search \
     "collection_id": "default",
     "top_k": 5
   }'
+```
+
+### Search with Query Expansion (Improved Relevance)
+```bash
+curl -X POST http://localhost:8000/api/v1/search \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "your search query",
+    "collection_id": "default",
+    "top_k": 5,
+    "use_query_expansion": true
+  }'
+# Note: Requires QUERY_EXPANSION_ENABLED=true in .env
 ```
 
 ---
