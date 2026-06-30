@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  rag-api:
+    build: .
+    container_name: rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DATABASE_URL=sqlite:///./rag_api.db
+      - CHROMA_DB_PATH=./chroma_db
+      - ENV=production
+      - DEBUG=false
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - CORS_ORIGINS=http://localhost:3000,http://localhost:8501
+    volumes:
+      - ./rag_api.db:/app/rag_api.db
+      - ./chroma_db:/app/chroma_db
+      - ./knowledge_base:/app/knowledge_base
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload-exclude '*.db' --reload-exclude '__pycache__' --reload-exclude 'chroma_db' --reload-exclude 'temp_uploads'
+    networks:
+      - rag-network
+
+  streamlit:
+    build:
+      context: ${STREAMLIT_PATH:-.}
+    container_name: streamlit-chat
+    ports:
+      - "8501:8501"
+    environment:
+      - RAG_API_URL=http://rag-api:8000
+    depends_on:
+      - rag-api
+    networks:
+      - rag-network
+    command: streamlit run streamlit_app.py --server.address 0.0.0.0
+
+networks:
+  rag-network:
+    driver: bridge
