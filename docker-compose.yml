@@ -4,6 +4,7 @@ services:
   rag-api:
     build: .
     container_name: rag-api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
@@ -11,32 +12,36 @@ services:
       - PORT=8000
       - DATABASE_URL=sqlite:///./rag_api.db
       - CHROMA_DB_PATH=./chroma_db
-      - ENV=production
-      - DEBUG=false
-      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - ENV=${ENV:-development}
+      - DEBUG=${DEBUG:-true}
+      - SECRET_KEY=${SECRET_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - CORS_ORIGINS=http://localhost:3000,http://localhost:8501
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:8501}
     volumes:
       - ./rag_api.db:/app/rag_api.db
       - ./chroma_db:/app/chroma_db
       - ./knowledge_base:/app/knowledge_base
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload-exclude '*.db' --reload-exclude '__pycache__' --reload-exclude 'chroma_db' --reload-exclude 'temp_uploads'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - rag-network
-
-  streamlit:
-    build:
-      context: ${STREAMLIT_PATH:-.}
-    container_name: streamlit-chat
-    ports:
-      - "8501:8501"
-    environment:
-      - RAG_API_URL=http://rag-api:8000
-    depends_on:
-      - rag-api
-    networks:
-      - rag-network
-    command: streamlit run streamlit_app.py --server.address 0.0.0.0
 
 networks:
   rag-network:

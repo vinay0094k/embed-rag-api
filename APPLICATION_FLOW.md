@@ -178,8 +178,7 @@ POST /api/v1/search
   "query": "how to deploy kubernetes?",
   "collection_id": "default",
   "top_k": 5,
-  "use_query_expansion": true,
-  "use_rerank": true
+  "use_query_expansion": true
 }
     ↓
 1. Validate request
@@ -224,16 +223,7 @@ POST /api/v1/search
     │
     └─ If no expansion: single query search (standard flow)
     ↓
-4. Rerank results (if enabled)
-    ├─ Take top_k results
-    ├─ OpenRouterReranker.rerank(query, docs)
-    │  ├─ Call: https://openrouter.ai/api/v1/embeddings
-    │  ├─ Model: nvidia/llama-nemotron-rerank-vl-1b-v2
-    │  ├─ Score documents by relevance
-    │  └─ Return ranked list
-    └─ Sort by relevance score
-    ↓
-5. Return top_k results
+4. Return top_k results
     └─ SearchResponse
         ├─ query: "how to deploy kubernetes?"
         ├─ results: [SearchResultItem, ...]
@@ -266,7 +256,6 @@ OPENROUTER_API_KEY=sk-xxx             # Required for expansion
 - `app/services/rag_service.py` - `search()` method with expansion logic
 - `app/services/expansion_service.py` - Query variant generation
 - `app/services/embedding_service.py` - Async embeddings
-- `app/services/reranker_service.py` - Reranking
 - `app/rag_components/vector_store.py` - Hybrid search
 
 ---
@@ -431,10 +420,6 @@ User: curl -X POST http://localhost:8000/api/v1/search \
     │    │  │
     │    │  └─ Merge all results (dedup by chunk_id, keep max score)
     │    │
-    │    ├─ Rerank results (if enabled)
-    │    │  ├─ Call OpenRouter reranker
-    │    │  └─ Score by relevance
-    │    │
     │    └─ Return top 5 SearchResponse (improved by expansion)
     │
     ├─→ Exception handler (if error)
@@ -472,8 +457,7 @@ Concurrent Requests (10 users searching simultaneously)
     ├─→ Request 1: Search query
     │    └─ Acquires _search_lock
     │       ├─ Performs hybrid_search
-    │       ├─ Releases lock
-    │       └─ Reranks (no lock)
+    │       └─ Releases lock
     │
     ├─→ Request 2: Upload document (>5MB)
     │    └─ Queues background task
@@ -550,7 +534,7 @@ Rate Limiting & Request Tracing
     ↓
 Route Handler + CRUD Operations
     ↓
-RAG Service (embeddings, search, reranking)
+RAG Service (embeddings, search, query expansion)
     ├─ Optional Query Expansion (LLM-based variants)
     │  ├─ Parallel multi-query search
     │  └─ Result deduplication & merging
@@ -572,4 +556,4 @@ All with:
 ✅ Reliability (locks, error handling, graceful shutdown, timeout handling)
 ✅ Observability (request tracing, structured logging)
 ✅ Performance (async, background tasks, caching, parallel searches)
-✅ Quality (query expansion for improved relevance, reranking)
+✅ Quality (query expansion for improved relevance)

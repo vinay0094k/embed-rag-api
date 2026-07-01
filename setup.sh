@@ -37,7 +37,7 @@ if [ $? -eq 0 ]; then
     echo "   nano .env"
     echo ""
     echo "2. Run the API:"
-    echo "   ./run.sh"
+    echo "   ./run_rag_api.sh"
     echo ""
 else
     echo ""

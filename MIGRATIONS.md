@@ -8,7 +8,7 @@ This project uses **Alembic** for database schema management. Migrations are tra
 
 ### Automatic (on app startup)
 ```bash
-./run.sh
+./run_rag_api.sh
 # Migrations run automatically during init_db()
 ```
 

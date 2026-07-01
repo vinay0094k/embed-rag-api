@@ -67,9 +67,4 @@ echo "=========================================="
 
 # Run the RAG API with reload exclusions (avoid infinite restart loop)
 uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug
-#uvicorn main:app --reload --host 0.0.0.0 --port 8000 \
-#  --reload-exclude '*.db' \
-#  --reload-exclude '__pycache__' \
-#  --reload-exclude 'chroma_db' \
-#  --reload-exclude 'temp_uploads' \
-#  --reload-exclude '.git'
+
